@@ -1,5 +1,5 @@
 import argparse, os, shutil
-from typing import List, Optional
+from typing import List, Optional, Tuple
 import torch
 import cv2
 import PIL
@@ -70,7 +70,7 @@ def load_img(path):
     return 2.0 * image - 1.0
 
 
-def convert_pil_img(image):
+def convert_pil_img(image: Image):
     w, h = image.size
     w, h = map(lambda x: x - x % 32, (w, h))  # resize to integer multiple of 32
     image = image.resize((w, h), resample=PIL.Image.Resampling.LANCZOS)
@@ -100,18 +100,22 @@ def grid_merge(source, slices):
 def grid_coords(target, original, overlap):
     # generate a list of coordinate tuples for our sections, in order of how they'll be rendered
     # target should be the size for the gobig result, original is the size of each chunk being rendered
-    center = []
+
     target_x, target_y = target
     center_x = int(target_x / 2)
     center_y = int(target_y / 2)
     original_x, original_y = original
     x = center_x - int(original_x / 2)
     y = center_y - int(original_y / 2)
-    center.append((x, y))  # center chunk
+    chunk_tuple = (x, y)
+    center = [chunk_tuple]
+    # center chunk superfluous reassign
     uy = y  # up
     uy_list = []
-    dy = y  # down
-    dy_list = []
+    dy: int = y  # down
+    CoordinateXY = Tuple[int, int]
+    CoordinateList = List[CoordinateXY]
+    dy_list: CoordinateList = []
     lx = x  # left
     lx_list = []
     rx = x  # right
@@ -121,7 +125,8 @@ def grid_coords(target, original, overlap):
         uy_list.append((lx, uy))
     while (dy + original_y) <= target_y:  # center row vertical down
         dy = dy + original_y - overlap
-        dy_list.append((rx, dy))
+        right_down = (rx, dy)
+        dy_list.append(right_down)
     while lx > 0:
         lx = lx - original_x + overlap
         lx_list.append((lx, y))
@@ -157,7 +162,7 @@ def grid_coords(target, original, overlap):
         new_edgex = int(target_x * scalary)
         new_edgey = int(target_y * scalary)
     # now put all the chunks into one master list of coordinates (essentially reverse of how we calculated them so that the central slices will be on top)
-    result = []
+    result: CoordinateList = []
     for coords in dy_list[::-1]:
         result.append(coords)
     for coords in uy_list[::-1]:
@@ -167,6 +172,7 @@ def grid_coords(target, original, overlap):
     for coords in lx_list[::-1]:
         result.append(coords)
     result.append(center[0])
+
     return result, (new_edgex, new_edgey)
 
 
@@ -519,8 +525,14 @@ def text2img2(opt: Options):
             slices, _ = grid_slice(source_image, opt.gobig_overlap, og_size, False)
 
             betterslices = []
-            for _, chunk_w_coords in tqdm(enumerate(slices), "Slices"):
-                chunk, coord_x, coord_y = chunk_w_coords
+            indexed_slices = enumerate(slices)
+            dynamica_progress_bar_iterable_decorated = tqdm(indexed_slices, "Slices")
+
+            for _, chunk_w_coords in dynamica_progress_bar_iterable_decorated:
+                chunk_tuple, coord_x, coord_y = chunk_w_coords
+                chunk = chunk_tuple[0] if len(chunk_tuple) >= 1 else None
+                if chunk is None:
+                    return
                 init_image = convert_pil_img(chunk).to(device)
                 init_image = repeat(init_image, "1 ... -> b ...", b=batch_size)
                 init_latent = model.get_first_stage_encoding(
@@ -528,7 +540,9 @@ def text2img2(opt: Options):
                 )  # move to latent space
 
                 sampler.make_schedule(
-                    ddim_num_steps=opt.detail_steps, ddim_eta=0, verbose=False
+                    ddim_num_steps=opt.detail_steps,
+                    ddim_eta=0,
+                    verbose=False,
                 )
 
                 assert (
