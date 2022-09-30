@@ -225,6 +225,8 @@ def grid_slice(
                 y,
             ),
         )
+
+    # ! Warning see txt2imghd.py predict.py global shared subprocessing
     global slices_todo
     slices_todo = len(slices) - 1
     return slices, new_size
@@ -397,11 +399,46 @@ def main():
 
 
 def realesrgan2x(executable: str, input: str, output: str):
+    """
+        Passes:  75%|███████████████████████████████████████████████████████████████████████████████████████████████████████▌                                  | 3/4 [32:54<10:58, 658.29s/it]
+    Traceback (most recent call last):
+      File "./scripts/txt2imghd.py", line 627, in <module>
+        main()
+      File "./scripts/txt2imghd.py", line 396, in main
+        text2img2(opt)
+      File "./scripts/txt2imghd.py", line 516, in text2img2
+        realesrgan2x(
+      File "./scripts/txt2imghd.py", line 405, in realesrgan2x
+        final_output = Image.open(output)
+      File "~\anaconda3\envs\ldm_stein\lib\site-packages\PIL\Image.py", line 3133, in open
+        im = _open_core(fp, filename, prefix, formats)
+      File "~\anaconda3\envs\ldm_stein\lib\site-packages\PIL\Image.py", line 3120, in _open_core
+        _decompression_bomb_check(im.size)
+      File "~\anaconda3\envs\ldm_stein\lib\site-packages\PIL\Image.py", line 3029, in _decompression_bomb_check
+        raise DecompressionBombError(
+    PIL.Image.DecompressionBombError: Image size (268435456 pixels) exceeds limit of 178956970 pixels, could be decompression bomb DOS attack.
+    (ldm_stein)
+
+
+    """
     process = subprocess.Popen(
-        [executable, "-i", input, "-o", output, "-n", "realesrgan-x4plus"]
+        [
+            executable,
+            "-i",
+            input,
+            "-o",
+            output,
+            "-n",
+            "realesrgan-x4plus",
+        ]
     )
     process.wait()
 
+    # 178956970 default limit
+    # 268435456 encountered
+    # \Image.py:3035: DecompressionBombWarning: Image size (67108864 pixels) exceeds limit of 42000000 pixels, could be decompression bomb DOS attack. warnings.warn(
+
+    Image.MAX_IMAGE_PIXELS = 2048000000
     final_output = Image.open(output)
     final_output = final_output.resize(
         (int(final_output.size[0] / 2), int(final_output.size[1] / 2)),
@@ -413,6 +450,7 @@ def realesrgan2x(executable: str, input: str, output: str):
 def text2img2(opt: Options):
 
     seed_everything(opt.seed)
+    seed: int = opt.seed
 
     config = OmegaConf.load(f"{opt.config}")
     model = load_model_from_config(config, f"{opt.ckpt}")
@@ -434,6 +472,7 @@ def text2img2(opt: Options):
     batch_size = 1
     precision_scope = autocast
     base_count = len(os.listdir(sample_path))
+    base_filename_prefix = f"{seed}.{base_count:05}"
 
     if not opt.from_file:
         prompt = opt.prompt
@@ -449,8 +488,8 @@ def text2img2(opt: Options):
     generated = opt.generated
     if generated is None and opt.img is not None:
         img = Image.open(opt.img).convert("RGB")
-        img.save(os.path.join(sample_path, f"{base_count:05}.png"))
-        generated = [f"{base_count:05}"]
+        img.save(os.path.join(sample_path, f"{base_filename_prefix}.png"))
+        generated = [f"{base_filename_prefix}"]
     elif isinstance(generated, str):
         generated = [generated]
 
@@ -499,11 +538,16 @@ def text2img2(opt: Options):
                                     x_sample.cpu().numpy(), "c h w -> h w c"
                                 )
                                 img = Image.fromarray(x_sample.astype(np.uint8))
+                                base_filename_prefix = f"{seed}.{base_count:05}"
+
                                 output_path = os.path.join(
-                                    sample_path, f"{base_count:05}.png"
+                                    sample_path,
+                                    f"{base_filename_prefix}.png",
                                 )
                                 img.save(output_path)
-                                generated.append(f"{base_count:05}")
+                                generated.append(
+                                    f"{base_filename_prefix}",
+                                )
                                 base_count += 1
 
         torch.cuda.empty_cache()
